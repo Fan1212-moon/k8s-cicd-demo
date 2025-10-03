@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: CI - Build & Deploy to VK Cloud K8s
 
 on:
   push:
@@ -9,30 +9,85 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    env:
+      OS_KEYSTONE_URL: ${{ secrets.OS_KEYSTONE_URL }}
+      OS_USERNAME:     ${{ secrets.OS_USERNAME }}
+      OS_PASSWORD:     ${{ secrets.OS_PASSWORD }}
+      OS_DOMAIN_NAME:  ${{ secrets.OS_DOMAIN_NAME }}
+      OS_PROJECT_NAME: ${{ secrets.OS_PROJECT_NAME }}
+
+      KUBE_SERVER:     ${{ secrets.KUBE_SERVER }}
+      KUBE_INSECURE:   ${{ secrets.KUBE_INSECURE }}
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: 'latest'
+          version: "v1.32.1"
 
-      - name: Write kubeconfig from secret
-        env:
-          KUBECONFIG_CI: ${{ secrets.KUBECONFIG_CI }}
-        run: |
-          mkdir -p ~/.kube
-          # 将 Secret 写入 kubeconfig 并作为默认配置
-          echo "$KUBECONFIG_CI" > ~/.kube/config
-          chmod 600 ~/.kube/config
-          kubectl version --client=true
-          kubectl cluster-info
-
-      - name: Apply Kubernetes manifests
+      - name: Install client-keystone-auth
         run: |
           set -e
-          kubectl apply -f k8s/deployment.yaml
-          kubectl apply -f k8s/service.yaml
-          echo "---- Objects ----"
-          kubectl get deploy,svc,pod -o wide
+          # 获取 cloud-provider-openstack 的预编译二进制
+          # 版本可以用最新 release；这里给出一个稳定示例 tag
+          VER="v1.31.0"
+          url="https://github.com/kubernetes/cloud-provider-openstack/releases/download/${VER}/client-keystone-auth-linux-amd64"
+          curl -fsSL "$url" -o /usr/local/bin/client-keystone-auth
+          chmod +x /usr/local/bin/client-keystone-auth
+          client-keystone-auth -h | sed -n '1,12p'
+
+      - name: Generate kubeconfig (exec plugin)
+        run: |
+          set -e
+          mkdir -p "$HOME/.kube"
+          cat > "$HOME/.kube/config" <<'EOF'
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: ${KUBE_SERVER}
+              # 生产建议提供 CA（certificate-authority-data），先用不校验证书以简化演示
+              insecure-skip-tls-verify: ${KUBE_INSECURE}
+            name: vkcloud
+          contexts:
+          - context:
+              cluster: vkcloud
+              user: keystone-user
+            name: vkcloud
+          current-context: vkcloud
+          users:
+          - name: keystone-user
+            user:
+              exec:
+                # 注意：这里用 v1beta1 以兼容插件输出
+                apiVersion: client.authentication.k8s.io/v1beta1
+                command: client-keystone-auth
+                interactiveMode: Never
+                args:
+                  - "--keystone-url=${OS_KEYSTONE_URL}"
+                  - "--user-name=${OS_USERNAME}"
+                  - "--password=${OS_PASSWORD}"
+                  - "--domain-name=${OS_DOMAIN_NAME}"
+                  - "--project-name=${OS_PROJECT_NAME}"
+          EOF
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Sanity check
+        run: |
+          kubectl config current-context
+          # 如果 API 可达，这里会打印控制面信息；失败会显示具体错误
+          kubectl cluster-info
+
+      # ===== 这里开始你的构建与部署步骤 =====
+      # 示例：应用仓库中的 k8s 清单（自行按需调整目录/文件名）
+      - name: Deploy manifests
+        run: |
+          set -e
+          # 示例，若你有 k8s/ 目录就执行：
+          # kubectl apply -f k8s/
+          # 下面给一个最小演示：确保命名空间存在，然后 rollout
+          kubectl get ns default >/dev/null 2>&1 || kubectl create ns default
+          echo "No specific manifests provided; add your k8s yaml under k8s/ and uncomment apply step."
