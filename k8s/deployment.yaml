@@ -1,18 +1,40 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: web
+  name: demo-nginx
+  labels:
+    app: demo-nginx
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: web }
+    matchLabels:
+      app: demo-nginx
   template:
     metadata:
-      labels: { app: web }
+      labels:
+        app: demo-nginx
     spec:
       containers:
-        - name: web
-          image: ghcr.io/OWNER_PLACEHOLDER/k8s-cicd-demo:latest
-          imagePullPolicy: Always
+        - name: nginx
+          image: nginx:1.25-alpine
           ports:
             - containerPort: 80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20

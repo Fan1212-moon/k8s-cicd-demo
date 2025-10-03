@@ -1,0 +1,38 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
+      - name: Write kubeconfig from secret
+        env:
+          KUBECONFIG_CI: ${{ secrets.KUBECONFIG_CI }}
+        run: |
+          mkdir -p ~/.kube
+          # 将 Secret 写入 kubeconfig 并作为默认配置
+          echo "$KUBECONFIG_CI" > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl version --client=true
+          kubectl cluster-info
+
+      - name: Apply Kubernetes manifests
+        run: |
+          set -e
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          echo "---- Objects ----"
+          kubectl get deploy,svc,pod -o wide
