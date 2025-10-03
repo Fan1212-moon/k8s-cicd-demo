@@ -1,0 +1,49 @@
+name: build-and-deploy
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/k8s-cicd-demo:latest
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build & Push image
+        run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Fix image owner placeholder in manifests
+        run: |
+          sed -i "s#ghcr.io/OWNER_PLACEHOLDER/k8s-cicd-demo:latest#${IMAGE}#g" k8s/deployment.yaml
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.32.0'
+
+      - name: Write kubeconfig from secret
+        run: |
+          echo "${{ secrets.KUBE_CONFIG }}" > "${{ github.workspace }}/kubeconfig"
+        shell: bash
+
+      - name: Apply manifests
+        env:
+          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+        run: |
+          kubectl apply -f k8s/
+          kubectl rollout status deploy/web --timeout=180s
+          kubectl get pods -o wide
